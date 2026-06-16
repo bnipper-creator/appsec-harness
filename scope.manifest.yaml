@@ -5,9 +5,9 @@
 
 meta:
   engagement_name: "AppSec Harness Validation Run — OWASP Juice Shop"
-  authorized_by: "Blake Gnipper — engagement owner"
+  authorized_by: "Blake Nipper — engagement owner"
   authorized_date: "2026-06-13"
-  engineer: "Blake Gnipper"
+  engineer: "Blake Nipper"
 
 # --- REPOS IN SCOPE ---
 repos:
