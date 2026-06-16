@@ -1,0 +1,46 @@
+# Authorization Scope Manifest
+# Fill this in BEFORE running any phase of the harness.
+# The dynamic-test agent reads this file and will refuse to send traffic
+# if the required fields are not populated.
+
+meta:
+  engagement_name: "AppSec Harness Validation Run — OWASP Juice Shop"
+  authorized_by: "Blake Gnipper — engagement owner"
+  authorized_date: "2026-06-13"
+  engineer: "Blake Gnipper"
+
+# --- REPOS IN SCOPE ---
+repos:
+  - url: "appsec-harness/validation/targets/juiceshop-src"
+    languages: [javascript, typescript]
+    build_cmd: ""              # Node.js — no build needed for SAST
+    notes: "OWASP Juice Shop source — intentionally-vulnerable practice app"
+
+# --- HOSTS / ENVIRONMENTS IN SCOPE ---
+# Add one entry per environment. "production" requires production_signoff below.
+hosts:
+  - url: "http://localhost:3001"
+    environment: "local"
+    isolated_network: true
+    notes: "Juice Shop running in Docker container 'juiceshop' on network appsec-isolated, mapped to host port 3001"
+
+# --- DYNAMIC TEST SIGN-OFF ---
+# The dynamic-test agent will refuse to send any traffic until this section is complete.
+# Fill in AFTER reviewing the staged test plan in state/findings.md.
+dynamic_test_signoff:
+  approved: true              # change to true after reviewing the staged plan
+  approved_by: "Blake"              # your name
+  approved_date: "06/13/2026"            # ISO-8601 datetime
+  scope_acknowledged: |
+    I confirm that the staged test plan covers only the hosts and repos listed
+    above, that I have reviewed each planned request, and that I authorize
+    the dynamic-test agent to execute the plan against the isolated environment.
+
+# --- PRODUCTION SIGN-OFF ---
+# Not applicable — this engagement targets a local Docker instance only.
+production_signoff:
+  approved: false
+  approved_by: ""
+  approved_date: ""
+  incident_runbook_url: ""
+  rollback_plan: ""

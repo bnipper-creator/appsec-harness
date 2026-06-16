@@ -1,0 +1,184 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "appsec-harness/threat-model.schema.json",
+  "title": "AppSec Threat Model",
+  "description": "Typed spine for the AppSec harness. Every finding, test case, SAST query, and dynamic test must trace back to a node in this document by ID.",
+  "type": "object",
+  "required": ["meta", "components", "trust_boundaries", "data_flows", "crown_jewels", "entry_points", "threats", "test_cases", "findings"],
+  "properties": {
+    "meta": {
+      "type": "object",
+      "required": ["schema_version", "target", "generated_at"],
+      "properties": {
+        "schema_version": { "type": "string", "const": "1.0" },
+        "target": { "type": "string", "description": "Short name of the application / repo being modeled" },
+        "generated_at": { "type": "string", "format": "date-time" },
+        "diagram_source": { "type": "string", "description": "Path or URL to the architecture diagram used, or 'derived-from-source'" },
+        "notes": { "type": "string" }
+      }
+    },
+    "components": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "type"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^C-[0-9]+$" },
+          "name": { "type": "string" },
+          "type": {
+            "type": "string",
+            "enum": ["process", "datastore", "external_entity", "queue", "service", "load_balancer", "other"]
+          },
+          "tech": { "type": "string", "description": "e.g. 'Node.js 20', 'PostgreSQL 15', 'S3'" },
+          "notes": { "type": "string" }
+        }
+      }
+    },
+    "trust_boundaries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "between"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^TB-[0-9]+$" },
+          "name": { "type": "string" },
+          "between": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Component IDs on each side of this boundary"
+          },
+          "notes": { "type": "string" }
+        }
+      }
+    },
+    "data_flows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "from", "to", "data", "crosses_boundary"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^DF-[0-9]+$" },
+          "from": { "type": "string", "description": "Component ID" },
+          "to": { "type": "string", "description": "Component ID" },
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["PII", "credentials", "session_tokens", "financial", "health", "public", "internal", "confidential", "secret"]
+            }
+          },
+          "protocol": { "type": "string", "description": "e.g. 'HTTPS', 'gRPC', 'SQL', 'AMQP'" },
+          "crosses_boundary": { "type": "boolean" },
+          "trust_boundary_id": { "type": "string", "description": "TB-* ID if crosses_boundary is true" },
+          "notes": { "type": "string" }
+        }
+      }
+    },
+    "crown_jewels": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "asset", "why_valuable", "components", "data_classification"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^CJ-[0-9]+$" },
+          "asset": { "type": "string" },
+          "why_valuable": { "type": "string", "description": "Business/security justification for why this is worth protecting" },
+          "components": { "type": "array", "items": { "type": "string" }, "description": "C-* IDs" },
+          "data_classification": {
+            "type": "string",
+            "enum": ["public", "internal", "confidential", "secret"]
+          }
+        }
+      }
+    },
+    "entry_points": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "surface", "component", "authn_required", "exposure"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^EP-[0-9]+$" },
+          "surface": { "type": "string", "description": "e.g. 'POST /api/login', 'file upload endpoint', 'admin CLI'" },
+          "component": { "type": "string", "description": "C-* ID" },
+          "authn_required": { "type": "boolean" },
+          "authn_mechanism": { "type": "string", "description": "e.g. 'JWT Bearer', 'session cookie', 'API key', 'none'" },
+          "exposure": {
+            "type": "string",
+            "enum": ["internet", "internal", "admin_only", "partner", "localhost"]
+          },
+          "notes": { "type": "string" }
+        }
+      }
+    },
+    "threats": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "stride", "description", "target", "affected_crown_jewels", "likelihood", "impact"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^T-[0-9]+$" },
+          "stride": {
+            "type": "string",
+            "enum": ["S", "T", "R", "I", "D", "E"],
+            "description": "Spoofing | Tampering | Repudiation | Information Disclosure | Denial of Service | Elevation of Privilege"
+          },
+          "description": { "type": "string" },
+          "target": { "type": "string", "description": "C-*, DF-*, or EP-* ID" },
+          "affected_crown_jewels": { "type": "array", "items": { "type": "string" }, "description": "CJ-* IDs" },
+          "likelihood": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
+          "impact": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
+          "notes": { "type": "string" }
+        }
+      }
+    },
+    "test_cases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "owasp", "maps_to_threat", "maps_to_entry_point", "data_classification", "resolution", "status"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^TC-[0-9]+$" },
+          "owasp": { "type": "string", "description": "e.g. 'A01:2021 Broken Access Control', 'A03:2021 Injection - SQLi'" },
+          "description": { "type": "string" },
+          "maps_to_threat": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "T-* IDs" },
+          "maps_to_entry_point": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "EP-* IDs" },
+          "data_classification": { "type": "string", "enum": ["public", "internal", "confidential", "secret"] },
+          "resolution": { "type": "string", "enum": ["static", "dynamic", "both"] },
+          "status": {
+            "type": "string",
+            "enum": ["pending", "in-progress", "confirmed-static", "static-inconclusive", "needs-dynamic-confirmation", "dynamic-only", "confirmed", "refuted", "inconclusive", "out-of-scope"]
+          },
+          "static_inconclusive_reason": {
+            "type": "string",
+            "description": "Required when status is static-inconclusive. Explain WHY static analysis cannot resolve this."
+          }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "from_test_case", "type", "severity", "evidence_artifact_path", "traced_threat", "status"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^F-[0-9]+$" },
+          "from_test_case": { "type": "string", "description": "TC-* ID" },
+          "type": { "type": "string", "enum": ["static", "dynamic"] },
+          "severity": { "type": "string", "enum": ["info", "low", "medium", "high", "critical"] },
+          "title": { "type": "string" },
+          "description": { "type": "string" },
+          "evidence_artifact_path": {
+            "type": "string",
+            "description": "Relative path to the raw Semgrep/CodeQL result row, or request/response file. REQUIRED — a finding without an artifact is not a finding."
+          },
+          "traced_threat": { "type": "array", "items": { "type": "string" }, "description": "T-* IDs" },
+          "status": {
+            "type": "string",
+            "enum": ["suspected", "confirmed", "refuted", "inconclusive"]
+          },
+          "reviewer_notes": { "type": "string" }
+        }
+      }
+    }
+  }
+}

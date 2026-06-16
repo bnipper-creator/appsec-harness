@@ -1,0 +1,15 @@
+# Third-party validation targets (clone locally; see validation/README.md)
+validation/targets/
+
+# Local dynamic-test captures (request/response pairs)
+artifacts/dynamic/
+
+# Environment / secrets
+.env
+.env.local
+
+# OS / IDE
+.DS_Store
+.vscode/
+.idea/
+*.swp

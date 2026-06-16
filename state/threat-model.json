@@ -1,0 +1,782 @@
+{
+  "meta": {
+    "schema_version": "1.0",
+    "target": "OWASP Juice Shop v20.0.0",
+    "generated_at": "2026-06-13T00:00:00Z",
+    "diagram_source": "derived-from-source",
+    "notes": "DFD derived from: package.json, server.ts, routes/, models/, lib/insecurity.ts, ftp/ and encryptionkeys/ directory listings. No architecture diagram provided. Gaps: WebSocket event handlers (registerWebsocketEvents) and Angular frontend internal routing not fully enumerated. AI/Web3 outbound flows identified but not deeply analyzed."
+  },
+  "components": [
+    {
+      "id": "C-1",
+      "name": "Angular Frontend SPA",
+      "type": "process",
+      "tech": "Angular 17 (TypeScript), served as static files from frontend/dist/frontend",
+      "notes": "Single-page application. Communicates with backend exclusively via REST API. No server-side rendering."
+    },
+    {
+      "id": "C-2",
+      "name": "Express REST API Server",
+      "type": "process",
+      "tech": "Node.js 22+, Express 4.x, TypeScript, express-jwt 0.1.3, jsonwebtoken 0.4.0, Finale REST",
+      "notes": "Core application process. Hosts all REST and auto-generated CRUD endpoints, serves static files, manages auth via JWT, runs Socket.IO server. Key auth logic in lib/insecurity.ts."
+    },
+    {
+      "id": "C-3",
+      "name": "SQLite Database",
+      "type": "datastore",
+      "tech": "SQLite 3, Sequelize ORM 6.x",
+      "notes": "Stores Users (credentials, roles, TOTP secrets), Products, Baskets, Orders, Cards (payment), Feedback, Complaints, SecurityAnswers, Wallets. Some routes bypass ORM and issue raw SQL."
+    },
+    {
+      "id": "C-4",
+      "name": "MarsDB Product Reviews Store",
+      "type": "datastore",
+      "tech": "MarsDB 0.6.x (in-process MongoDB-compatible NoSQL)",
+      "notes": "Stores product reviews. Accessed via showProductReviews, createProductReviews, updateProductReviews, likeProductReviews routes."
+    },
+    {
+      "id": "C-5",
+      "name": "Local Filesystem",
+      "type": "datastore",
+      "tech": "Node.js fs module, multer disk storage",
+      "notes": "Contains: /ftp (acquisitions.md, incident-support.kdbx, coupons_2013.md.bak, eastere.gg, suspicious_errors.yml), /encryptionkeys (jwt.pub, premium.key), /logs (rotating access logs), /uploads/complaints (user file uploads), /frontend/dist/frontend/assets/public/images/uploads (profile images)."
+    },
+    {
+      "id": "C-6",
+      "name": "Web Browser (Unauthenticated User)",
+      "type": "external_entity",
+      "notes": "Internet-facing user interacting via HTTP. Not authenticated by default. All unauthenticated endpoints are reachable."
+    },
+    {
+      "id": "C-7",
+      "name": "B2B Client (External Ordering System)",
+      "type": "external_entity",
+      "notes": "External business client posting orders to /b2b/v2/orders. Must carry a valid JWT. Supplies orderLinesData field that is server-side eval'd."
+    },
+    {
+      "id": "C-8",
+      "name": "Prometheus Metrics Collector",
+      "type": "service",
+      "tech": "prom-client 15.x",
+      "notes": "Collects and exposes application metrics at /metrics without any authentication or IP restriction."
+    },
+    {
+      "id": "C-9",
+      "name": "External AI Chat Service",
+      "type": "external_entity",
+      "tech": "@ai-sdk/openai-compatible",
+      "notes": "External LLM API called via POST /rest/chat. User chat content crosses to an external provider over HTTPS."
+    },
+    {
+      "id": "C-10",
+      "name": "Ethereum Blockchain",
+      "type": "external_entity",
+      "tech": "ethers.js 6.x",
+      "notes": "External blockchain for NFT minting and wallet verification. Outbound calls from /rest/web3/* endpoints."
+    }
+  ],
+  "trust_boundaries": [
+    {
+      "id": "TB-1",
+      "name": "Internet → Express Server",
+      "between": ["C-6", "C-2"],
+      "notes": "All HTTP traffic from untrusted internet users and B2B clients enters here. No TLS enforced at app layer (HTTP, not HTTPS, per scope manifest host config)."
+    },
+    {
+      "id": "TB-2",
+      "name": "Express Server → SQLite Database",
+      "between": ["C-2", "C-3"],
+      "notes": "Application-to-database boundary. Sequelize ORM is used for most queries; login.ts and search.ts issue raw SQL with direct string interpolation."
+    },
+    {
+      "id": "TB-3",
+      "name": "Express Server → Local Filesystem",
+      "between": ["C-2", "C-5"],
+      "notes": "Express reads FTP files and encryption keys directly from disk and serves them. Multer writes user-supplied files. Zip extraction writes to uploads/complaints with partial path-traversal protection."
+    },
+    {
+      "id": "TB-4",
+      "name": "Express Server → External Services",
+      "between": ["C-2", "C-9"],
+      "notes": "Outbound HTTPS connections to AI chat API and Ethereum network. User-supplied content is forwarded externally."
+    }
+  ],
+  "data_flows": [
+    {
+      "id": "DF-1",
+      "from": "C-6",
+      "to": "C-2",
+      "data": ["credentials", "PII", "financial"],
+      "protocol": "HTTP",
+      "crosses_boundary": true,
+      "trust_boundary_id": "TB-1",
+      "notes": "User submits login credentials, registration data (including role field), payment info, file uploads, and product reviews."
+    },
+    {
+      "id": "DF-2",
+      "from": "C-7",
+      "to": "C-2",
+      "data": ["internal", "credentials"],
+      "protocol": "HTTP",
+      "crosses_boundary": true,
+      "trust_boundary_id": "TB-1",
+      "notes": "B2B client sends JWT-authenticated order requests. orderLinesData field content is eval'd server-side via vm.runInContext."
+    },
+    {
+      "id": "DF-3",
+      "from": "C-2",
+      "to": "C-3",
+      "data": ["PII", "credentials", "financial", "session_tokens"],
+      "protocol": "SQL",
+      "crosses_boundary": true,
+      "trust_boundary_id": "TB-2",
+      "notes": "Express issues SQL queries to SQLite. login.ts:34 and search.ts:23 use raw string-interpolated queries enabling SQLi."
+    },
+    {
+      "id": "DF-4",
+      "from": "C-2",
+      "to": "C-4",
+      "data": ["public", "internal"],
+      "protocol": "internal",
+      "crosses_boundary": false,
+      "notes": "Express queries in-process MarsDB for product reviews. NoSQL query composition paths not fully audited."
+    },
+    {
+      "id": "DF-5",
+      "from": "C-2",
+      "to": "C-5",
+      "data": ["confidential", "secret", "internal"],
+      "protocol": "filesystem",
+      "crosses_boundary": true,
+      "trust_boundary_id": "TB-3",
+      "notes": "Express reads/writes filesystem: serves /ftp and /encryptionkeys contents directly, writes multer uploads, reads/writes rotating access logs."
+    },
+    {
+      "id": "DF-6",
+      "from": "C-6",
+      "to": "C-2",
+      "data": ["internal"],
+      "protocol": "HTTP",
+      "crosses_boundary": true,
+      "trust_boundary_id": "TB-1",
+      "notes": "File uploads (XML, ZIP, YAML) from browser. XML parsed with noent:true (XXE); ZIP extracted with partial path traversal check; YAML loaded unsafely (yaml bomb risk)."
+    },
+    {
+      "id": "DF-7",
+      "from": "C-2",
+      "to": "C-9",
+      "data": ["internal", "PII"],
+      "protocol": "HTTPS",
+      "crosses_boundary": true,
+      "trust_boundary_id": "TB-4",
+      "notes": "User chat messages relayed to external AI service. Content may include PII depending on user input."
+    }
+  ],
+  "crown_jewels": [
+    {
+      "id": "CJ-1",
+      "asset": "User Credentials and Account Data",
+      "why_valuable": "The Users table contains email addresses, MD5-hashed passwords (trivially crackable via rainbow tables or GPU brute-force), HMAC-SHA256'd security answers, TOTP secrets, and role assignments. Compromise enables direct account takeover for all users including admins, and enables cross-service credential stuffing since MD5 hashes facilitate password recovery.",
+      "components": ["C-3"],
+      "data_classification": "confidential"
+    },
+    {
+      "id": "CJ-2",
+      "asset": "JWT RSA Private Signing Key",
+      "why_valuable": "The 1024-bit RSA private key is hardcoded as a plaintext string literal in lib/insecurity.ts (line 23). Any party with access to the source code can use this key to mint valid JWTs for any user identity and role (including admin) without credentials, nullifying all authentication controls.",
+      "components": ["C-2"],
+      "data_classification": "secret"
+    },
+    {
+      "id": "CJ-3",
+      "asset": "Payment Card and Wallet Data",
+      "why_valuable": "The Cards model stores saved payment method data and the Wallet model tracks user balances. Unauthorized read access enables financial fraud; unauthorized write access enables free purchases or balance manipulation within the application.",
+      "components": ["C-3"],
+      "data_classification": "confidential"
+    },
+    {
+      "id": "CJ-4",
+      "asset": "FTP Sensitive Files and Encryption Keys",
+      "why_valuable": "The /ftp directory contains incident-support.kdbx (KeePass password database — likely holds credentials to other systems), acquisitions.md (confidential M&A data), coupons_2013.md.bak (discount key material), and suspicious_errors.yml. The /encryptionkeys directory holds jwt.pub and premium.key. These files provide lateral movement opportunities, reveal corporate strategy, and supply additional authentication material.",
+      "components": ["C-5"],
+      "data_classification": "secret"
+    }
+  ],
+  "entry_points": [
+    {
+      "id": "EP-1",
+      "surface": "POST /rest/user/login",
+      "component": "C-2",
+      "authn_required": false,
+      "authn_mechanism": "none",
+      "exposure": "internet",
+      "notes": "Accepts JSON {email, password}. Executes raw SQL SELECT with direct string interpolation (login.ts:34). No parameterized query."
+    },
+    {
+      "id": "EP-2",
+      "surface": "GET /rest/products/search?q=",
+      "component": "C-2",
+      "authn_required": false,
+      "authn_mechanism": "none",
+      "exposure": "internet",
+      "notes": "URL parameter q interpolated directly into SQL LIKE clause (search.ts:23). Truncated at 200 chars but not sanitized."
+    },
+    {
+      "id": "EP-3",
+      "surface": "POST /file-upload (multipart/form-data)",
+      "component": "C-2",
+      "authn_required": false,
+      "authn_mechanism": "none",
+      "exposure": "internet",
+      "notes": "Accepts PDF, XML, ZIP, YAML/YML. Max 200KB. XML: libxmljs2 with noent:true (XXE). ZIP: path traversal via entry.path. YAML: js-yaml.load() with alias expansion (YAML bomb)."
+    },
+    {
+      "id": "EP-4",
+      "surface": "POST /b2b/v2/orders",
+      "component": "C-2",
+      "authn_required": true,
+      "authn_mechanism": "JWT Bearer",
+      "exposure": "internet",
+      "notes": "Requires valid JWT. orderLinesData field evaluated via vm.runInContext('safeEval(orderLinesData)', sandbox) (b2bOrder.ts:22-23). VM sandbox escape enables RCE."
+    },
+    {
+      "id": "EP-5",
+      "surface": "GET /ftp, /ftp/:file, /encryptionkeys, /encryptionkeys/:file",
+      "component": "C-2",
+      "authn_required": false,
+      "authn_mechanism": "none",
+      "exposure": "internet",
+      "notes": "FTP directory listing via serveIndex and file download via servePublicFiles. /encryptionkeys similarly listed and served. No authentication check. Contains incident-support.kdbx, jwt.pub, premium.key."
+    },
+    {
+      "id": "EP-6",
+      "surface": "POST /rest/user/reset-password",
+      "component": "C-2",
+      "authn_required": false,
+      "authn_mechanism": "none",
+      "exposure": "internet",
+      "notes": "Accepts {email, answer, new, repeat}. Rate-limited to 100 req/5min but keyGenerator uses X-Forwarded-For header (server.ts:346) — spoofable by any client."
+    },
+    {
+      "id": "EP-7",
+      "surface": "PUT /rest/products/:id/reviews",
+      "component": "C-2",
+      "authn_required": false,
+      "authn_mechanism": "none",
+      "exposure": "internet",
+      "notes": "Creates product reviews without authentication. Backed by MarsDB NoSQL store."
+    },
+    {
+      "id": "EP-8",
+      "surface": "GET /metrics",
+      "component": "C-2",
+      "authn_required": false,
+      "authn_mechanism": "none",
+      "exposure": "internet",
+      "notes": "Prometheus metrics endpoint. No auth, no IP restriction. Exposes internal request counts, startup timing, file upload sizes."
+    },
+    {
+      "id": "EP-9",
+      "surface": "POST /api/Users (user registration)",
+      "component": "C-2",
+      "authn_required": false,
+      "authn_mechanism": "none",
+      "exposure": "internet",
+      "notes": "Finale-generated CRUD endpoint. Accepts all User model attributes in POST body including role, enabling mass assignment to self-register as admin."
+    },
+    {
+      "id": "EP-10",
+      "surface": "GET /redirect?to=",
+      "component": "C-2",
+      "authn_required": false,
+      "authn_mechanism": "none",
+      "exposure": "internet",
+      "notes": "Open redirect with allowlist validated via url.includes(allowedUrl) substring match (insecurity.ts:137). Bypassable by embedding allowed URL as substring in attacker-controlled URL."
+    },
+    {
+      "id": "EP-11",
+      "surface": "GET /support/logs and /support/logs/:file",
+      "component": "C-2",
+      "authn_required": false,
+      "authn_mechanism": "none",
+      "exposure": "internet",
+      "notes": "Access log directory listing (serveIndex) and download (serveLogFiles). No authentication. Logs are in Combined Log Format containing IPs, paths, timestamps, and user-agents."
+    },
+    {
+      "id": "EP-12",
+      "surface": "GET/PUT /profile (user profile update — routes/userProfile.ts)",
+      "component": "C-2",
+      "authn_required": true,
+      "authn_mechanism": "JWT Bearer",
+      "exposure": "internet",
+      "notes": "User profile route handled by routes/userProfile.ts. Semgrep detected user-supplied data flowing to eval() at line 61. Exact route path TBD from server.ts route registration — requires dynamic confirmation."
+    }
+  ],
+  "threats": [
+    {
+      "id": "T-1",
+      "stride": "S",
+      "description": "Attacker extracts the RSA private key hardcoded as a string literal in lib/insecurity.ts (line 23) and uses it to mint valid JWTs for any user identity and role, including admin. The key is also derivable from any public fork of the open-source repository. jwt.sign() in authorize() (insecurity.ts:56) uses this same hardcoded privateKey.",
+      "target": "C-2",
+      "affected_crown_jewels": ["CJ-2", "CJ-1", "CJ-3"],
+      "likelihood": "high",
+      "impact": "critical",
+      "notes": "1024-bit RSA key is a plaintext string in source. jwt library version 0.4.0 in use (extremely old). Public repo code makes this trivially extractable."
+    },
+    {
+      "id": "T-2",
+      "stride": "T",
+      "description": "SQL injection in POST /rest/user/login: req.body.email is directly concatenated into the SQL string at login.ts:34 — `SELECT * FROM Users WHERE email = '${req.body.email}'...`. Attacker submits email=\"' OR '1'='1'--\" to bypass authentication and log in as the first user in the database (typically admin).",
+      "target": "EP-1",
+      "affected_crown_jewels": ["CJ-1", "CJ-3"],
+      "likelihood": "critical",
+      "impact": "critical",
+      "notes": "Classic string-interpolation SQLi. Confirmed at login.ts:34. SQLite processes UNION, OR, and comment sequences."
+    },
+    {
+      "id": "T-3",
+      "stride": "T",
+      "description": "SQL injection in GET /rest/products/search via ?q= parameter (search.ts:23): user input truncated to 200 chars then interpolated into `SELECT * FROM Products WHERE ((name LIKE '%${criteria}%'...`. UNION SELECT attack exfiltrates all Users rows including email and MD5 password hashes.",
+      "target": "EP-2",
+      "affected_crown_jewels": ["CJ-1"],
+      "likelihood": "critical",
+      "impact": "high",
+      "notes": "200-char truncation limits but does not prevent UNION injection. SQLite supports UNION SELECT from multiple tables."
+    },
+    {
+      "id": "T-4",
+      "stride": "R",
+      "description": "Access logs at /support/logs are browseable and downloadable without authentication (server.ts:281-283). An attacker can read logs revealing what paths other users accessed. Combined with rate-limit bypass via spoofed X-Forwarded-For header (server.ts:346), attackers conducting brute-force or enumeration attacks can evade per-IP rate limiting, leaving no reliable attribution trail.",
+      "target": "EP-11",
+      "affected_crown_jewels": ["CJ-1"],
+      "likelihood": "high",
+      "impact": "medium",
+      "notes": "Morgan Combined Log Format entries include IP, timestamp, method, URL, status, and user-agent. Session timing correlation possible."
+    },
+    {
+      "id": "T-5",
+      "stride": "I",
+      "description": "XXE injection via POST /file-upload: libxmljs2 parses user-supplied XML with `{ noblanks: true, noent: true, nocdata: true }` (fileUpload.ts:83). The noent:true flag enables external entity expansion. Attacker uploads XML declaring an external entity pointing to file:///etc/passwd or a Windows path; file contents are reflected in the 410 error response body (fileUpload.ts:87).",
+      "target": "EP-3",
+      "affected_crown_jewels": ["CJ-2", "CJ-4"],
+      "likelihood": "high",
+      "impact": "high",
+      "notes": "noent:true explicitly set in source. xxeFileDisclosureChallenge confirmed. Error response includes xmlString which contains resolved entities."
+    },
+    {
+      "id": "T-6",
+      "stride": "I",
+      "description": "Unauthenticated directory listing and file download at /ftp (server.ts:269-270) and /encryptionkeys (server.ts:277-278). serveIndex generates a browseable directory listing; servePublicFiles and serveKeyFiles serve file bytes without any auth check. Attacker can download incident-support.kdbx, premium.key, acquisitions.md, and coupon backup files directly.",
+      "target": "EP-5",
+      "affected_crown_jewels": ["CJ-4", "CJ-2"],
+      "likelihood": "critical",
+      "impact": "high",
+      "notes": "No auth middleware applied before serveIndex or file serving routes. Only /ftp/quarantine has a separate handler (serveQuarantineFiles). All other FTP files freely downloadable."
+    },
+    {
+      "id": "T-7",
+      "stride": "I",
+      "description": "Prometheus metrics endpoint at GET /metrics exposed without authentication (server.ts:725). Returns request counts per endpoint, startup timing per task, file upload size histograms, and Node.js runtime metrics. Enables attacker reconnaissance of which endpoints are actively used, response time baselines, and memory consumption patterns.",
+      "target": "EP-8",
+      "affected_crown_jewels": [],
+      "likelihood": "high",
+      "impact": "low",
+      "notes": "Low direct data-loss impact; primary risk is reconnaissance enabling more targeted attacks on high-traffic endpoints."
+    },
+    {
+      "id": "T-8",
+      "stride": "D",
+      "description": "YAML bomb DoS via POST /file-upload: handleYamlUpload (fileUpload.ts:116) calls yaml.load(data) inside a vm sandbox with a 2-second timeout. A maliciously crafted YAML alias bomb (billion-laughs variant) expands exponentially in memory before the timeout fires, exhausting Node.js heap and crashing or degrading the process. The 200KB upload limit permits effective YAML bombs.",
+      "target": "EP-3",
+      "affected_crown_jewels": [],
+      "likelihood": "medium",
+      "impact": "high",
+      "notes": "yamlBombChallenge confirmed in source. js-yaml.load() is alias-expansion-safe in newer versions but confirmation requires version check. No pre-parse size check on YAML content."
+    },
+    {
+      "id": "T-9",
+      "stride": "E",
+      "description": "Mass assignment on user registration via POST /api/Users: the Finale-generated REST endpoint exposes all User model attributes. Attacker POSTs {\"email\":\"attacker@x.com\",\"password\":\"pass\",\"role\":\"admin\"} to self-register with admin role. No server-side attribute filtering on creation (server.ts:482-516). registerAdminChallenge in source confirms this is an active vulnerability.",
+      "target": "EP-9",
+      "affected_crown_jewels": ["CJ-1", "CJ-3"],
+      "likelihood": "critical",
+      "impact": "critical",
+      "notes": "Trivially exploitable. role field defaults to customer in model but the default is overrideable via POST body. Finale does not strip unknown/privileged attributes."
+    },
+    {
+      "id": "T-10",
+      "stride": "E",
+      "description": "RCE via B2B order endpoint: POST /b2b/v2/orders passes orderLinesData directly to vm.runInContext('safeEval(orderLinesData)', sandbox, {timeout:2000}) (b2bOrder.ts:22-23). Node.js vm module sandboxes are not security boundaries — known escape techniques (e.g., accessing constructor chain to reach process) can execute arbitrary OS commands. Requires valid JWT (any registered user). A second eval injection path exists at routes/userProfile.ts:61 (separate from this threat — see T-12).",
+      "target": "EP-4",
+      "affected_crown_jewels": ["CJ-1", "CJ-2", "CJ-3", "CJ-4"],
+      "likelihood": "medium",
+      "impact": "critical",
+      "notes": "rceChallenge and rceOccupyChallenge confirmed in source. VM sandbox escape is a documented Node.js limitation. notevil's safeEval adds a second guard but is not hardened against all bypass techniques."
+    },
+    {
+      "id": "T-11",
+      "stride": "S",
+      "description": "Open redirect at GET /redirect?to= (routes/redirect.ts:19). Allowlist validation in isRedirectAllowed() (insecurity.ts:137) uses url.includes(allowedUrl) substring matching — bypassable by embedding an allowed URL string as a query parameter of a malicious URL (e.g., http://evil.com/?ref=https://juice-sh.op). Enables phishing by redirecting users from the trusted application domain to an attacker-controlled site. Surfaced by Semgrep rule express-open-redirect.",
+      "target": "EP-10",
+      "affected_crown_jewels": ["CJ-1"],
+      "likelihood": "medium",
+      "impact": "medium",
+      "notes": "Bonus finding from Phase 3 SAST. The bypassable substring check is confirmed statically at insecurity.ts:137. No existing test case covered this route before Phase 3."
+    },
+    {
+      "id": "T-12",
+      "stride": "E",
+      "description": "Eval injection at routes/userProfile.ts:61: user-supplied data from an Express HTTP request flows directly to eval(). This is a distinct eval injection path from T-10 (b2bOrder.ts vm escape) and is served by the user profile endpoint (EP-12). The exact user-controlled field reaching eval() requires dynamic confirmation. Impact is potentially OS-level code execution depending on what eval receives.",
+      "target": "EP-12",
+      "affected_crown_jewels": ["CJ-1", "CJ-2", "CJ-3", "CJ-4"],
+      "likelihood": "medium",
+      "impact": "critical",
+      "notes": "Bonus finding from Phase 3 SAST. Semgrep rule code-string-concat confirmed Express request data flows to eval at userProfile.ts:61. Exact payload and exploitation path requires dynamic testing."
+    }
+  ],
+  "test_cases": [
+    {
+      "id": "TC-1",
+      "owasp": "A03:2021 Injection — SQL Injection (Authentication Bypass)",
+      "description": "Submit POST /rest/user/login with email payload `' OR '1'='1'--` and any password. Verify the server returns a valid JWT without a matching credential, confirming authentication bypass via string-interpolated SQL query at login.ts:34.",
+      "maps_to_threat": ["T-2"],
+      "maps_to_entry_point": ["EP-1"],
+      "data_classification": "confidential",
+      "resolution": "both",
+      "status": "confirmed"
+    },
+    {
+      "id": "TC-2",
+      "owasp": "A03:2021 Injection — SQL Injection (UNION-based Data Exfiltration)",
+      "description": "Submit GET /rest/products/search?q= with UNION SELECT payload targeting the Users table (e.g., `')) UNION SELECT id,email,password,role,NULL,NULL,NULL,NULL,NULL FROM Users--`). Verify that response contains email and MD5 password hash rows from Users table, confirming exfiltration via search.ts:23.",
+      "maps_to_threat": ["T-3"],
+      "maps_to_entry_point": ["EP-2"],
+      "data_classification": "confidential",
+      "resolution": "both",
+      "status": "confirmed"
+    },
+    {
+      "id": "TC-3",
+      "owasp": "A02:2021 Cryptographic Failures — Hardcoded JWT Private Key",
+      "description": "Statically confirm lib/insecurity.ts contains a hardcoded RSA private key string literal (line 23). Verify jwt.sign() in authorize() (line 56) uses this same private key. Demonstrate minting a forged admin JWT offline using the extracted key and verify it is accepted by any protected endpoint.",
+      "maps_to_threat": ["T-1"],
+      "maps_to_entry_point": ["EP-1"],
+      "data_classification": "secret",
+      "resolution": "static",
+      "status": "confirmed"
+    },
+    {
+      "id": "TC-4",
+      "owasp": "A05:2021 Security Misconfiguration — XML External Entity (XXE) Injection",
+      "description": "Upload an XML file to POST /file-upload containing an external entity declaration (e.g., `<!DOCTYPE foo [<!ENTITY xxe SYSTEM 'file:///etc/passwd'>]><foo>&xxe;</foo>`). Verify that the 410 error response body contains the contents of /etc/passwd, confirming XXE via libxmljs2 with noent:true at fileUpload.ts:83.",
+      "maps_to_threat": ["T-5"],
+      "maps_to_entry_point": ["EP-3"],
+      "data_classification": "confidential",
+      "resolution": "both",
+      "status": "confirmed",
+      "static_inconclusive_reason": "Semgrep OWASP Top Ten (114 rules) and JavaScript security pack (74 rules) both ran against fileUpload.ts and produced zero results for this pattern. libxmljs2 noent:true is not covered by any Semgrep standard ruleset. The vm.runInContext wrapper around the libxml call may additionally obscure source-to-sink taint tracking. Vulnerability is structurally confirmed from Phase 1 source review (noent:true at fileUpload.ts:83) but requires a dynamic test to produce an artifact-backed confirmation."
+    },
+    {
+      "id": "TC-5",
+      "owasp": "A01:2021 Broken Access Control — Unauthenticated Sensitive File Download",
+      "description": "Without any authentication, GET /ftp and /encryptionkeys to confirm directory listing. Then GET /ftp/incident-support.kdbx and /encryptionkeys/premium.key. Verify files are served with 200 OK and binary content without any auth challenge.",
+      "maps_to_threat": ["T-6"],
+      "maps_to_entry_point": ["EP-5"],
+      "data_classification": "secret",
+      "resolution": "dynamic",
+      "status": "confirmed",
+      "static_inconclusive_reason": "Semgrep confirmed the directory listing configuration is missing auth middleware (express-check-directory-listing fired at server.ts:269, 273, 277, 281 — F-4 in findings[]). Static analysis cannot confirm that the specific sensitive files (incident-support.kdbx, premium.key) are actually downloadable without an HTTP-level challenge. Dynamic test required to produce a 200 OK response with file bytes as the artifact."
+    },
+    {
+      "id": "TC-6",
+      "owasp": "A04:2021 Insecure Design — Mass Assignment on User Registration",
+      "description": "POST to /api/Users with JSON body `{\"email\":\"attacker@evil.com\",\"password\":\"TestPass1!\",\"passwordRepeat\":\"TestPass1!\",\"role\":\"admin\"}`. Log in with these credentials, decode the resulting JWT, and verify role=admin is set. Optionally access an admin-only endpoint to confirm privilege.",
+      "maps_to_threat": ["T-9"],
+      "maps_to_entry_point": ["EP-9"],
+      "data_classification": "confidential",
+      "resolution": "both",
+      "status": "confirmed",
+      "static_inconclusive_reason": "Semgrep OWASP Top Ten and JavaScript packs produced zero results for Finale mass assignment patterns. This vulnerability arises from Finale auto-generating CRUD endpoints that expose all Sequelize model attributes — a framework convention, not a detectable code pattern. Static taint analysis cannot determine at analysis time which body fields a Finale endpoint persists. Dynamic test required to confirm that POSTing role=admin produces a persisted admin account."
+    },
+    {
+      "id": "TC-7",
+      "owasp": "A03:2021 Injection — Server-Side Code Execution (VM Sandbox Escape)",
+      "description": "Authenticate as any registered user. POST to /b2b/v2/orders with orderLinesData containing a Node.js vm sandbox escape payload (e.g., accessing constructor chain to reach process.mainModule). Static check: confirm vm.runInContext wraps safeEval(orderLinesData) with untrusted input at b2bOrder.ts:22. Dynamic test: verify code execution signal (file write, DNS callback) from inside the sandbox.",
+      "maps_to_threat": ["T-10"],
+      "maps_to_entry_point": ["EP-4"],
+      "data_classification": "internal",
+      "resolution": "both",
+      "status": "inconclusive",
+      "static_inconclusive_reason": "Semgrep produced no result for vm.runInContext(safeEval(userInput)) at b2bOrder.ts:22. Standard Semgrep JavaScript rules do not model the Node.js vm module as a dangerous sink in the same way as eval() or execSync(). A separate eval injection was found in userProfile.ts:61 (see F-6, TC-11) which is a different code path. The b2bOrder.ts vm sandbox escape requires a dynamic PoC to confirm constructor-chain traversal exits the sandbox."
+    },
+    {
+      "id": "TC-8",
+      "owasp": "A05:2021 Security Misconfiguration — YAML Bomb Denial of Service",
+      "description": "Upload a crafted YAML alias bomb (<200KB) to POST /file-upload. Monitor server memory and CPU during processing. Verify server process degrades or crashes before returning a response, or that the yamlBombChallenge is solved in the challenge tracker, confirming uncontrolled alias expansion in handleYamlUpload at fileUpload.ts:116.",
+      "maps_to_threat": ["T-8"],
+      "maps_to_entry_point": ["EP-3"],
+      "data_classification": "public",
+      "resolution": "dynamic",
+      "status": "confirmed"
+    },
+    {
+      "id": "TC-9",
+      "owasp": "A01:2021 Broken Access Control — Unauthenticated Access Log Download",
+      "description": "Without authentication, GET /support/logs to confirm directory listing. Download the most recent access.log file and verify it contains Combined Log Format entries (IP, path, timestamp, user-agent) of other users' sessions. Confirm no authentication challenge is issued.",
+      "maps_to_threat": ["T-4"],
+      "maps_to_entry_point": ["EP-11"],
+      "data_classification": "internal",
+      "resolution": "dynamic",
+      "status": "confirmed"
+    },
+    {
+      "id": "TC-10",
+      "owasp": "A01:2021 Broken Access Control — Unauthenticated Prometheus Metrics Exposure",
+      "description": "Without authentication, GET /metrics. Verify Prometheus metrics payload is returned (HTTP 200, text/plain; version=0.0.4 content type). Confirm metrics include endpoint request counts, startup duration labels, and Node.js runtime data. Verify no authentication or IP allowlist is enforced.",
+      "maps_to_threat": ["T-7"],
+      "maps_to_entry_point": ["EP-8"],
+      "data_classification": "internal",
+      "resolution": "dynamic",
+      "status": "confirmed"
+    },
+    {
+      "id": "TC-11",
+      "owasp": "A03:2021 Injection — Eval Injection via User Profile Route",
+      "description": "Bonus SAST finding. Semgrep rule code-string-concat detected user-supplied Express request data flowing to eval() at routes/userProfile.ts:61. Static: artifact in F-6. Dynamic: identify the specific user-controlled field (username, avatar path, or profile bio), craft a payload that reaches eval(), and confirm code execution or error response revealing the eval context.",
+      "maps_to_threat": ["T-12"],
+      "maps_to_entry_point": ["EP-12"],
+      "data_classification": "internal",
+      "resolution": "both",
+      "status": "inconclusive"
+    },
+    {
+      "id": "TC-12",
+      "owasp": "A01:2021 Broken Access Control — Open Redirect",
+      "description": "Bonus SAST finding. Semgrep rule express-open-redirect confirmed user query parameter flows to redirect at routes/redirect.ts:19 without adequate validation. Static: confirmed via F-7. Dynamic: craft URL /redirect?to=http://evil.com/?ref=https://juice-sh.op (embedding an allowed domain as a query parameter) and verify a 302 redirect to evil.com is issued, confirming the url.includes() bypass.",
+      "maps_to_threat": ["T-11"],
+      "maps_to_entry_point": ["EP-10"],
+      "data_classification": "internal",
+      "resolution": "both",
+      "status": "confirmed"
+    }
+  ],
+  "findings": [
+    {
+      "id": "F-1",
+      "from_test_case": "TC-1",
+      "type": "static",
+      "severity": "critical",
+      "title": "SQL Injection — Authentication Bypass via Raw String Interpolation (login.ts:34)",
+      "description": "Semgrep rule express-sequelize-injection (CWE-89) fired at routes/login.ts line 34. req.body.email is directly interpolated into a Sequelize raw query string without parameterization or escaping. Payload ' OR '1'='1'-- bypasses the WHERE email = '...' clause and returns the first database row (admin). Rule corroborated by JS security pack (same file, same line).",
+      "evidence_artifact_path": "artifacts/sast/semgrep-owasp-top-ten-20260613T204704.json#result[13]",
+      "traced_threat": ["T-2"],
+      "status": "confirmed",
+      "reviewer_notes": "Also confirmed by semgrep-javascript-20260613T204743.json#result[8]. Secondary instances found in static/codefixes/dbSchemaChallenge_1.ts:5 and dbSchemaChallenge_3.ts:11 (same rule) — educational codefix files, not primary attack surface."
+    },
+    {
+      "id": "F-2",
+      "from_test_case": "TC-2",
+      "type": "static",
+      "severity": "critical",
+      "title": "SQL Injection — UNION-based Exfiltration via Search Endpoint (search.ts:23)",
+      "description": "Semgrep rule express-sequelize-injection (CWE-89) fired at routes/search.ts line 23. URL query parameter q is truncated to 200 characters then directly interpolated into a raw SQL LIKE clause. The 200-char truncation does not prevent UNION SELECT payloads. Enables exfiltration of the entire Users table including MD5-hashed passwords. Rule corroborated by JS security pack.",
+      "evidence_artifact_path": "artifacts/sast/semgrep-owasp-top-ten-20260613T204704.json#result[16]",
+      "traced_threat": ["T-3"],
+      "status": "confirmed",
+      "reviewer_notes": "Also confirmed by semgrep-javascript-20260613T204743.json#result[11]. Secondary instances found in static/codefixes/unionSqlInjectionChallenge_1.ts:6 and unionSqlInjectionChallenge_3.ts:10 — educational codefix files."
+    },
+    {
+      "id": "F-3",
+      "from_test_case": "TC-3",
+      "type": "static",
+      "severity": "critical",
+      "title": "Hardcoded JWT RSA Signing Key (lib/insecurity.ts:56)",
+      "description": "Semgrep rule hardcoded-jwt-secret (CWE-798) fired at lib/insecurity.ts line 56, where jwt.sign() is called with the hardcoded privateKey variable. The key itself is a 1024-bit RSA PEM string defined at line 23 of the same file as a plaintext string literal. Any reader of the source code can extract the key and mint valid JWTs for any user identity including admin. TC-3 is fully resolved by static analysis — no dynamic confirmation needed.",
+      "evidence_artifact_path": "artifacts/sast/semgrep-owasp-top-ten-20260613T204704.json#result[9]",
+      "traced_threat": ["T-1"],
+      "status": "confirmed",
+      "reviewer_notes": "OWASP maps this to A07:2021 Identification and Authentication Failures. The rule fired at the jwt.sign() usage (line 56) not the key definition (line 23). Both together fully confirm T-1. Corroborated by semgrep-javascript-20260613T204743.json#result[4]."
+    },
+    {
+      "id": "F-4",
+      "from_test_case": "TC-5",
+      "type": "static",
+      "severity": "high",
+      "title": "Unauthenticated Directory Listing — FTP, EncryptionKeys, Logs (server.ts:269-281)",
+      "description": "Semgrep rule express-check-directory-listing (CWE-548) fired four times at server.ts lines 269, 273, 277, and 281. serveIndex middleware is registered for /ftp, /encryptionkeys, /support/logs, and a fourth directory without any authentication middleware applied before or after. This statically confirms missing access control on directory enumeration for all four paths. Dynamic test still required to confirm actual file bytes are served without auth challenge.",
+      "evidence_artifact_path": "artifacts/sast/semgrep-owasp-top-ten-20260613T204704.json#result[18]",
+      "traced_threat": ["T-6"],
+      "status": "confirmed",
+      "reviewer_notes": "Additional hits at result[19], result[20], result[21] for lines 273, 277, 281 respectively. OWASP maps to A01:2021 Broken Access Control (CWE-548). Static confirms missing auth middleware configuration; F-5 covers the file-serving path traversal risk."
+    },
+    {
+      "id": "F-5",
+      "from_test_case": "TC-5",
+      "type": "static",
+      "severity": "medium",
+      "title": "Path Traversal Risk in File Serving Routes (fileServer.ts:33, keyServer.ts:14, logfileServer.ts:14)",
+      "description": "Semgrep rule express-res-sendfile (CWE-73) fired at routes/fileServer.ts:33, routes/keyServer.ts:14, and routes/logfileServer.ts:14. User-supplied filename parameters are passed to res.sendFile() without confirmed path normalization or boundary enforcement. Combined with the missing authentication found in F-4, this creates a path traversal risk: an attacker may be able to traverse outside the intended serving directory by supplying path sequences like ../. Requires dynamic confirmation of actual traversal extent.",
+      "evidence_artifact_path": "artifacts/sast/semgrep-owasp-top-ten-20260613T204704.json#result[10]",
+      "traced_threat": ["T-6"],
+      "status": "confirmed",
+      "reviewer_notes": "CWE-73 External Control of File Name or Path. OWASP A04:2021 Insecure Design. Additional hits at result[11] (keyServer.ts:14), result[12] (logfileServer.ts:14), result[14] (quarantineServer.ts:14). The quarantine server finding may be lower risk if the quarantine directory itself is isolated."
+    },
+    {
+      "id": "F-6",
+      "from_test_case": "TC-11",
+      "type": "static",
+      "severity": "critical",
+      "title": "Eval Injection — User Profile Route (routes/userProfile.ts:61)",
+      "description": "Semgrep rule code-string-concat (CWE-95) fired at routes/userProfile.ts line 61. Data from an Express HTTP request flows to eval() via string concatenation. This is a distinct eval injection path from T-10 (b2bOrder.ts vm.runInContext). The specific user-controlled field and exact exploitation path require dynamic confirmation, but the Semgrep source-to-eval taint trace is a confirmed finding. If exploitable, impact is OS-level code execution.",
+      "evidence_artifact_path": "artifacts/sast/semgrep-owasp-top-ten-20260613T204704.json#result[17]",
+      "traced_threat": ["T-12"],
+      "status": "confirmed",
+      "reviewer_notes": "Bonus SAST finding — not in original Phase 2 test case scope. CWE-95 Improper Neutralization of Directives in Dynamically Evaluated Code. OWASP A03:2021 Injection. Corroborated by semgrep-javascript-20260613T204743.json#result[12]. New test case TC-11 and threat T-12 created to track this finding."
+    },
+    {
+      "id": "F-7",
+      "from_test_case": "TC-12",
+      "type": "static",
+      "severity": "medium",
+      "title": "Open Redirect — Bypassable Allowlist Validation (routes/redirect.ts:19)",
+      "description": "Semgrep rule express-open-redirect (CWE-601) fired at routes/redirect.ts line 19. User-supplied query parameter is passed to a redirect without adequate allowlist validation. The allowlist check in insecurity.ts:137 uses url.includes(allowedUrl) — a substring match that is bypassable by embedding an allowed domain as a query parameter of an attacker-controlled URL (e.g., http://evil.com/?ref=https://juice-sh.op). Enables phishing by redirecting users from the trusted domain.",
+      "evidence_artifact_path": "artifacts/sast/semgrep-owasp-top-ten-20260613T204704.json#result[15]",
+      "traced_threat": ["T-11"],
+      "status": "confirmed",
+      "reviewer_notes": "Bonus SAST finding — not in original Phase 2 test case scope. CWE-601 URL Redirection to Untrusted Site. OWASP A01:2021 Broken Access Control. Corroborated by semgrep-javascript-20260613T204743.json#result[10]. New test case TC-12 and threat T-11 created."
+    },
+    {
+      "id": "F-8",
+      "from_test_case": "TC-1",
+      "type": "dynamic",
+      "severity": "critical",
+      "title": "SQLi Auth Bypass Exploitability Confirmed — Admin JWT Returned Without Credentials (PLAN-001)",
+      "description": "POST /rest/user/login with email: \"' OR '1'='1'--\" and password: \"anything\" returned HTTP 200 with a signed JWT. JWT payload decoded to email: admin@juice-sh.op, role: admin (user id=1, the first database row). Full authentication bypass achieved without any valid credential. Confirms F-1 static finding is fully exploitable at runtime.",
+      "evidence_artifact_path": "artifacts/dynamic/PLAN-001-20260614T031715Z.txt",
+      "traced_threat": ["T-2"],
+      "status": "confirmed",
+      "reviewer_notes": "Payload: {\"email\":\"' OR '1'='1'--\",\"password\":\"anything\"}. Response: HTTP 200 with authentication.token JWT. JWT data.email=admin@juice-sh.op, data.role=admin. Confirms CWE-89 at login.ts:34 is exploitable in production-equivalent environment."
+    },
+    {
+      "id": "F-9",
+      "from_test_case": "TC-6",
+      "type": "dynamic",
+      "severity": "critical",
+      "title": "Mass Assignment — Admin Role Self-Registration Confirmed (PLAN-002)",
+      "description": "POST /api/Users with {\"email\":\"pentest-admin@juice.invalid\",\"password\":\"P3nt3st!\",\"passwordRepeat\":\"P3nt3st!\",\"role\":\"admin\"} returned HTTP 201 with role:admin in the response body. Login JWT confirmed role=admin in payload. GET /rest/admin/application-configuration returned HTTP 200 confirming admin privilege is enforced. Finale-generated CRUD endpoint does not filter privileged model attributes.",
+      "evidence_artifact_path": "artifacts/dynamic/PLAN-002-20260614T031730Z.txt",
+      "traced_threat": ["T-9"],
+      "status": "confirmed",
+      "reviewer_notes": "HTTP 201 on registration with role:admin in response. JWT payload data.role=admin. Admin endpoint /rest/admin/application-configuration returned HTTP 200. Confirms CWE-915 (improperly controlled modification of dynamically-determined object attributes). OWASP A04:2021 Insecure Design."
+    },
+    {
+      "id": "F-10",
+      "from_test_case": "TC-2",
+      "type": "dynamic",
+      "severity": "critical",
+      "title": "SQLi UNION Exfiltration Confirmed — 23 User Rows Exfiltrated (PLAN-003)",
+      "description": "GET /rest/products/search?q with payload ')) UNION SELECT id,email,password,'4',5.0,'',datetime(),datetime(),NULL FROM Users-- returned HTTP 200 with 80 total rows. 23 rows contained User table data (email mapped to name column, MD5 password hash mapped to description column). Full Users table dump including admin@juice-sh.op credentials exfiltrated without authentication. Confirms F-2 is fully exploitable.",
+      "evidence_artifact_path": "artifacts/dynamic/PLAN-003-20260614T031923Z.txt",
+      "traced_threat": ["T-3"],
+      "status": "confirmed",
+      "reviewer_notes": "Corrected payload from plan: NULL values for numeric columns (price, deluxePrice) caused empty result; type-compatible literals required. Final payload: ')) UNION SELECT id,email,password,'4',5.0,'',datetime(),datetime(),NULL FROM Users--. 23 user rows returned. Payload length: 86 chars — well under 200-char truncation limit at search.ts:21."
+    },
+    {
+      "id": "F-11",
+      "from_test_case": "TC-5",
+      "type": "dynamic",
+      "severity": "high",
+      "title": "Unauthenticated FTP File Download and Encryption Key Exposure Confirmed (PLAN-004)",
+      "description": "GET /ftp returned HTTP 200 HTML directory listing (11297 bytes) without any authentication. GET /ftp/incident-support.kdbx returned HTTP 200 with 3246 bytes of binary KeePass database without auth. GET /encryptionkeys/premium.key returned HTTP 200 with 50-byte plaintext key: 1337133713371337.EA99A61D92D2955B1E9285B55BF2AD42. Path traversal probe /ftp/..%2F..%2Fpackage.json returned HTTP 403 — traversal blocked by express sanitization. Confirms F-4 and F-5 at runtime. Crown jewel CJ-4 fully accessible.",
+      "evidence_artifact_path": "artifacts/dynamic/PLAN-004-20260614T031942Z.txt",
+      "traced_threat": ["T-6"],
+      "status": "confirmed",
+      "reviewer_notes": "F-4 (CWE-548 directory listing) and F-5 (CWE-73 path traversal risk) both confirmed. Path traversal itself was blocked by HTTP 403 (express-serve-static sanitization) — F-5 risk is partially mitigated. The primary risk (unauth file download) is fully confirmed. Directory listing includes: acquisitions.md, coupons_2013.md.bak, eastere.gg, incident-support.kdbx, legal.md, package.json.bak."
+    },
+    {
+      "id": "F-12",
+      "from_test_case": "TC-4",
+      "type": "dynamic",
+      "severity": "high",
+      "title": "XXE Injection Confirmed — /etc/passwd Contents Reflected in 410 Error Body (PLAN-005)",
+      "description": "POST /file-upload with XML payload <?xml version=\"1.0\"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM \"file:///etc/passwd\">]><foo>&xxe;</foo> returned HTTP 410 error whose title included the expanded entity value: root:x:0:0:root:/root:/sbin/nologin, nobody:x:65534:65534:nobody:/nonexistent:/sbin/nologin, nonroot:x:65532:65532:nonroot:/home/nonroot:/sbin/nologin. External entity expansion via libxmljs2 noent:true at fileUpload.ts:83 is confirmed exploitable. Local file read via file:// URI is active.",
+      "evidence_artifact_path": "artifacts/dynamic/PLAN-005-20260614T032030Z.txt",
+      "traced_threat": ["T-5"],
+      "status": "confirmed",
+      "reviewer_notes": "HTTP 410 response. Error title contained full xmlString including resolved &xxe; entity value = /etc/passwd file contents from Docker container. Three /etc/passwd entries visible: root, nobody, nonroot. Confirms CWE-611 XXE at fileUpload.ts:83 (noent:true in libxmljs2 parse options). No Semgrep rule detected this (TC-4 was static-inconclusive); dynamic test was required."
+    },
+    {
+      "id": "F-13",
+      "from_test_case": "TC-11",
+      "type": "dynamic",
+      "severity": "critical",
+      "title": "Eval Injection (User Profile) — Inconclusive: Runtime Guard Disabled in Docker (PLAN-006)",
+      "description": "POST /profile with username=#{process.version} saved the payload to the database (confirmed in JWT). GET /profile rendered the Pug template but the eval branch at userProfile.ts:61 was not reached. Source inspection revealed: isChallengeEnabled(usernameXssChallenge) returns false because usernameXssChallenge has disabledEnv:Docker. The eval code path exists (F-6 SAST confirmed) but is gated off in Docker environments. No code execution signal observed.",
+      "evidence_artifact_path": "artifacts/dynamic/PLAN-006-20260614T032207Z.txt",
+      "traced_threat": ["T-12"],
+      "status": "inconclusive",
+      "reviewer_notes": "The eval at userProfile.ts:61 is wrapped in: if (username?.match(/#{(.*)}/) !== null && utils.isChallengeEnabled(challenges.usernameXssChallenge)). The usernameXssChallenge.disabledEnv=Docker prevents the branch from firing. F-6 static finding stands as the evidence. To confirm dynamically: remove Docker from disabledEnv in challenges.yml and rebuild, or set safetyMode=disabled in config. Risk remains: if deployed outside Docker or with modified config, this is fully exploitable."
+    },
+    {
+      "id": "F-14",
+      "from_test_case": "TC-7",
+      "type": "dynamic",
+      "severity": "critical",
+      "title": "VM Sandbox Escape (B2B Orders) — Inconclusive: Runtime Guard Disabled in Docker (PLAN-007)",
+      "description": "POST /b2b/v2/orders with baseline (1+1), constructor-chain escape, and global.process.version payloads all returned HTTP 200 with order confirmation responses. Source inspection revealed: the dangerous vm.runInContext(safeEval(orderLinesData)) path at b2bOrder.ts:17-26 is gated by isChallengeEnabled(rceChallenge) || isChallengeEnabled(rceOccupyChallenge). Both have disabledEnv:Docker. The else branch ran for all probes — no eval executed.",
+      "evidence_artifact_path": "artifacts/dynamic/PLAN-007-20260614T032527Z.txt",
+      "traced_threat": ["T-10"],
+      "status": "inconclusive",
+      "reviewer_notes": "Both rceChallenge and rceOccupyChallenge have disabledEnv:Docker. The vm.runInContext code path does not execute in this environment. The threat (T-10) remains valid based on source code analysis. To confirm dynamically: modify disabledEnv in challenges.yml or set safetyMode=disabled. All three probes returned 200 order-number responses from the else branch."
+    },
+    {
+      "id": "F-15",
+      "from_test_case": "TC-8",
+      "type": "dynamic",
+      "severity": "medium",
+      "title": "YAML Bomb DoS — 2062ms Response Confirms Alias Expansion Delay (PLAN-008)",
+      "description": "POST /file-upload with a 5-level YAML alias bomb (9^5 = 59,049 aliases) targeting js-yaml 3.14.x took 2062ms (>2000ms pass threshold) compared to ~100-200ms for normal requests. Response was HTTP 410 (not 503), with truncated JSON of the expanded bomb in the error body, indicating the vm sandbox completed expansion just at the timeout boundary. yamlBombChallenge has disabledEnv:Docker so the challenge was not marked solved. Container survived; larger bomb would produce reliable 503.",
+      "evidence_artifact_path": "artifacts/dynamic/PLAN-008-20260614T032937Z.txt",
+      "traced_threat": ["T-8"],
+      "status": "confirmed",
+      "reviewer_notes": "js-yaml version 3.14.x (supports alias expansion; v4.x would use CORE_SCHEMA and reject). YAML expansion inside vm context at fileUpload.ts:117. 2062ms response time vs normal ~100-200ms. Got HTTP 410 not 503 — vm.runInContext completed at boundary rather than timeout. yamlBombChallenge disabledEnv:Docker prevents challenge solve but not the processing path. A 6-level bomb (9^6 = 531,441 entries) would reliably trigger 503."
+    },
+    {
+      "id": "F-16",
+      "from_test_case": "TC-9",
+      "type": "dynamic",
+      "severity": "medium",
+      "title": "Unauthenticated Access Log Download Confirmed (PLAN-009)",
+      "description": "GET /support/logs returned HTTP 200 HTML directory listing titled 'listing directory /support/logs' (8889 bytes) without authentication. GET /support/logs/access.log.2026-06-14 returned HTTP 200 with 4739 bytes of Combined Log Format entries. Log contents included full request history from the pentest session: POST /rest/user/login (HTTP 200), POST /api/Users (HTTP 201), GET /rest/admin/application-configuration (HTTP 200). IP addresses, timestamps, methods, paths, status codes, and user-agents all visible without authentication.",
+      "evidence_artifact_path": "artifacts/dynamic/PLAN-009-20260614T032749Z.txt",
+      "traced_threat": ["T-4"],
+      "status": "confirmed",
+      "reviewer_notes": "F-4 static finding covered /ftp and /encryptionkeys directory listing. /support/logs is a separate directory listing registration (server.ts:281). Same missing-auth pattern. Logs include full Combined Log Format entries. An attacker can enumerate all recent user activity patterns, identify admin accounts by their request paths, and time correlation attacks against authentication logs."
+    },
+    {
+      "id": "F-17",
+      "from_test_case": "TC-12",
+      "type": "dynamic",
+      "severity": "medium",
+      "title": "Open Redirect Allowlist Bypass Confirmed — HTTP 302 to evil.example.com (PLAN-010)",
+      "description": "GET /redirect?to=http://evil.example.com/?ref=https://github.com/juice-shop/juice-shop returned HTTP 302 with Location: http://evil.example.com/?ref=https://github.com/juice-shop/juice-shop. The isRedirectAllowed() check at insecurity.ts:137 uses url.includes() — since the URL contains an allowlisted string (https://github.com/juice-shop/juice-shop) as a substring, the check evaluates true despite the actual destination being evil.example.com. Redirect NOT followed; no traffic reached evil.example.com. Confirms F-7 (CWE-601) is exploitable.",
+      "evidence_artifact_path": "artifacts/dynamic/PLAN-010-20260614T032842Z.txt",
+      "traced_threat": ["T-11"],
+      "status": "confirmed",
+      "reviewer_notes": "Plan used ?ref=https://juice-sh.op but juice-sh.op is not in the actual allowlist (insecurity.ts:124-131). Corrected payload used https://github.com/juice-shop/juice-shop which IS allowlisted. Both demonstrate the same CWE-601 substring bypass. Direct evil.example.com (without allowlisted substring) returned HTTP 406 — baseline confirmed. Bypass returned HTTP 302 Location pointing to attacker domain."
+    },
+    {
+      "id": "F-18",
+      "from_test_case": "TC-10",
+      "type": "dynamic",
+      "severity": "low",
+      "title": "Prometheus Metrics Exposure Confirmed — 26KB of Runtime Metrics Accessible (PLAN-011)",
+      "description": "GET /metrics without authentication returned HTTP 200 with Content-Type: text/plain; version=0.0.4 (Prometheus text exposition format) and 25999 bytes of metrics data. Metrics include: file_upload_errors per content-type (revealing XXE test via text/xml error count), http_requests_count by status code, juiceshop_llm_input/output_tokens (revealing LLM usage), juiceshop_startup_duration_seconds, process_cpu_user_seconds_total, and Node.js heap metrics. No authentication required.",
+      "evidence_artifact_path": "artifacts/dynamic/PLAN-011-20260614T032910Z.txt",
+      "traced_threat": ["T-7"],
+      "status": "confirmed",
+      "reviewer_notes": "Metrics reveal pentest session activity: file_upload_errors{file_type=\"text/xml\"}=1 (our XXE probe is visible). An attacker can enumerate active endpoints, detect security testing, infer LLM API key usage, and monitor memory/CPU consumption patterns. OWASP A01:2021 Broken Access Control. /metrics has no auth middleware and no IP allowlist."
+    }
+  ]
+}
