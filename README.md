@@ -124,3 +124,7 @@ state/               threat-model.schema.json + the Juice Shop threat model & fi
 artifacts/sast/      Semgrep result sets from the Juice Shop run
 validation/          Tiered targets, full-chain walkthrough, ground-truth vuln list
 ```
+
+## License
+
+[MIT](LICENSE) — use it as you see fit.
